@@ -110,6 +110,7 @@ function Seq2Seq:eval(input)
 
   -- Forward <go> and all of it's output recursively back to the decoder
   local output = {self.goToken}
+
   for i = 1, MAX_OUTPUT_SIZE do
     local prediction = self.decoder:forward(torch.Tensor(output))[#output]
     -- prediction contains the probabilities for each word IDs.
@@ -118,6 +119,7 @@ function Seq2Seq:eval(input)
 
     -- First one is the most likely.
     next_output = wordIds[1]
+    
     table.insert(output, next_output)
 
     -- Terminate on EOS token
@@ -133,4 +135,99 @@ function Seq2Seq:eval(input)
   self.encoder:forget()
 
   return predictions, probabilities
+end
+
+----------------------------------------------------------------------------------------------------
+-- Beam search
+----------------------------------------------------------------------------------------------------
+local BEAMS_NUMBER = 2
+local MAX_OUTPUT_SIZE_BEAM_SEARCH = 7
+
+function reverse(tbl)
+  for i = 1, math.floor(#tbl / 2) do
+    local tmp = tbl[i]
+    tbl[i] = tbl[#tbl - i + 1]
+    tbl[#tbl - i + 1] = tmp
+  end
+end
+
+function Seq2Seq:beam_search(output, decoder)
+
+  if #output == MAX_OUTPUT_SIZE_BEAM_SEARCH or 
+    (#output ~= 0 and output[#output] == self.eosToken) then
+    return {}, 0
+  end
+
+  local prediction = decoder:forward(torch.Tensor(output))[#output]
+  -- prob - word probability from log soft max (negative), the bigger it is the most probable is the corresponding word
+  local prob, wordIds = prediction:topk(5, 1, true, true) 
+  local beam_prob = {}
+  p_sum = 0
+
+  for i = 1, BEAMS_NUMBER do
+    table.insert(output, wordIds[i])
+    _, beam_prob_cur = Seq2Seq:beam_search(output, decoder)
+    beam_prob[i] = beam_prob_cur
+    p_sum = p_sum + beam_prob_cur
+    table.remove(output)
+  end
+
+  p = math.random()
+  best_beam_i = BEAMS_NUMBER
+  p_sum = 0
+
+  for i = 1, BEAMS_NUMBER do
+    beam_prob[i] = beam_prob[i] / p_sum
+    p_sum = p_sum + beam_prob[i]
+
+    if p < p_sum then
+      best_beam_i = i
+
+      break
+    end
+  end
+
+  -- local best_beam_i = 1
+  -- local best_beam_prob = -1e30
+
+
+  -- for i = 1, BEAMS_NUMBER do
+  --   table.insert(output, wordIds[i])
+    -- beamWordIds, beam_prob = Seq2Seq:beam_search(output, decoder)
+    -- beam_prob = beam_prob + prob[i]
+
+    -- if beam_prob > best_beam_prob then
+    --   best_beam_prob = beam_prob
+    --   best_beam_i = i
+    -- end
+  --   table.remove(output)
+  -- end
+
+  table.insert(output, wordIds[best_beam_i])
+  beamWordIds, beam_prob = Seq2Seq:beam_search(output, decoder)
+  table.remove(output)
+
+  table.insert(beamWordIds, wordIds[best_beam_i])
+
+  return beamWordIds, beam_prob + prob[best_beam_i]
+end
+
+function Seq2Seq:eval_with_beam_search(input)
+  assert(self.goToken, "No goToken specified")
+  assert(self.eosToken, "No eosToken specified")
+
+  self.encoder:forward(input)
+  self:forwardConnect(input:size(1))
+
+  -- Forward <go> and all of it's output recursively back to the decoder
+  output = {self.goToken}
+
+  wordIds, _ = Seq2Seq:beam_search(output, self.decoder)
+
+  self.decoder:forget()
+  self.encoder:forget()
+
+  reverse(wordIds)
+
+  return wordIds
 end

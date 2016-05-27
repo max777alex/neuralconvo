@@ -75,3 +75,27 @@ function say(text)
     printProbabilityTable(wordIds, probabilities, 4)
   end
 end
+
+function say_beam_search(text)
+  local wordIds = {}
+
+  for t, word in tokenizer.tokenize(text) do
+    local id = dataset.word2id[word:lower()] or dataset.unknownToken
+    table.insert(wordIds, id)
+  end
+
+  local input = torch.Tensor(list.reverse(wordIds))
+  local wordIds = model:eval_with_beam_search(input)
+
+  -- print(wordIds)
+
+  local words = {}
+  for _, wordId in ipairs(wordIds) do
+    if wordId ~= 2 then
+      local word = dataset.id2word[wordId]
+      table.insert(words, word)
+    end
+  end
+
+  print(">> " .. tokenizer.join(words))
+end
